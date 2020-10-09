@@ -1,0 +1,224 @@
+1 案例：采集目录到HDFS
+  source spooldir
+  channel memeory
+  sink hdfs
+2 采集文件内容到HDFS
+  source exec
+    tail -F 监听某个文件
+  channel memroy
+  sink hdfs
+    hdfs.path hdfs的存放路径
+    hdfs.filePrefix = events- 文件前缀
+    hdfs.round = true
+    hdfs.roundValue = 10
+    hdfs.roundUnit = minute
+      a1.sinks.k1.hdfs.path = /flume/events/%y-%m-%d/%H%M/
+      a1.sinks.k1.hdfs.round = true
+      a1.sinks.k1.hdfs.roundValue = 10
+      a1.sinks.k1.hdfs.roundUnit = minute
+      当时间为 2015-10-16 17:38:59 时候，hdfs.path 依然会被解析为：
+      /flume/events/20151016/1730/
+    rollInterval 指定间隔秒数 把tmp文件重命名成最终文件
+    rollSize  指定文件大小
+    rollCount 指定接收的event消息数量
+3 Flume插件
+  Interceptors拦截器
+    Timestamp Interceptor
+    Static Interceptor：静态拦截器
+    Regex Filtering Interceptor:拦截器用于过滤事件
+4 日志收集实战案例
+  案例场景：A、B 两台日志服务机器实时生产日志主要类型为 access.log、nginx.log、web.log
+  现在要求：把 A、B 机器中的 access.log、nginx.log、web.log 采集汇总到 C 机器上
+  确定整个的拓扑结构
+  A、B配置
+    source 因为监听3个文件，所以是3个source
+    exec-memory-avro.sources = access-source nginx-source web-source
+      tail命令监听三个文件，
+      static 拦截器的功能就是往采集到的数据的 header 中插入自己定义的 key-value 对
+    sink avro sink
+    channel memeory
+  C 配置
+    source avro source
+    channel memory
+    sink hdfs
+
+5 Kafka
+  1 为何使用消息系统
+    目的：解耦、异步
+    MQ缺点也存在：
+      系统可用性降低
+      系统复杂度提高
+  2 Kafka简介
+    Kafka 是一个分布式消息队列
+      以时间复杂度为 O(1) 的方式提供消息持久化能力，即使对 TB 级以上数据也能保证常数时间复杂度的访问性能。
+      高吞吐率。
+    生产者消费者模式
+      引入缓冲区使得生产者和消费者解耦 异步
+  3 Kafka安装使用
+    安装kafka配置
+    使用测试
+      1 开启zookeeper
+        /root/bigdata/kafka/bin/zookeeper-server-start.sh -daemon /root/bigdata/kafka/config/zookeeper.properties
+      2 kafka的服务
+        /root/bigdata/kafka/bin/kafka-server-start.sh /root/bigdata/kafka/config/server.properties
+      3 验证
+        开启消息生产者
+        /root/bigdata/kafka/bin/kafka-console-producer.sh --broker-list 192.168.19.137:9092 --sync --topic click-trace
+        开启消费者
+        /root/bigdata/kafka/bin/kafka-console-consumer.sh --bootstrap-server 192.168.19.137:9092 --topic  click-trace
+  4 Kafka架构
+    基本概念
+      Broker：Kafka集群包含一个或多个服务器，这种服务器被称为broker
+      Topic：每条发布到Kafka集群的消息都有一个类别，这个类别被称为Topic。
+      Partition：Parition是物理上的概念，每个Topic包含一个或多个Partition
+        click-trace-0
+      Producer：负责发布消息到Kafka broker
+      Consumer：消息消费者
+      Consumer Group：每个Consumer属于一个特定的Consumer Group
+      Zookeeper：保存着集群broker、topic、partition等meta数据 负责broker故障发现
+    基本原理
+      数据存储
+        分区命名规则：
+          <topic>-<partition-id>
+        每个分区中有两类文件，文件命名是以分段文件中最小消息编号命名
+          *.log 分段文件 存了消息 size offset data
+          *.index 部分消息在分段文件中相对偏移 和具体位置
+        存：
+          直接找到最大的分段文件，直接在文件结尾插入数据
+        取：
+          根据消息的id使用二分查找法确定在哪个分段文件中
+          接着可以计算出该消息的相对偏移量
+          用相对偏移量到索引文件中使用二分查找法
+            找到具体消息的位置，可以直接去分段文件中读取
+            没找到要查找的消息位置，但是找到它前面的消息，根据这个信息去分段文件中再向下读取1-2条消息即可
+  5 Message Queue常见对比
+    如果是大数据领域的实时计算、日志采集等场景，用 Kafka 是业内标准的，绝对没问题
+  6 命令使用
+    创建主题
+    /root/bigdata/kafka/bin/kafka-topics.sh --create --zookeeper localhost:2181 --replication-factor 1 --partitions 1 --topic test
+    replication-factor：副本数量
+    partitions：分区数量
+    查看主题
+    /root/bigdata/kafka/bin/kafka-topics.sh --list --zookeeper localhost:2181
+    启动生产者
+    kafka-console-producer.sh --broker-list localhost:9092 --topic test
+    启动消费值接收消息
+    kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic test --from-beginning
+     --from-beginning：从最开始生产队的数据开始消费
+  7 Kafka Python API
+    下载安装kafka-python:pip install kafka-python
+    验证是否安装成功:import kafka
+
+    创建Kafka生产者有三个基本属性
+      bootstrap.servers：属性值是一个host:port的broker列表。
+      key.serializer：因此需要将这些对象序列化成字节数组。
+      value.serializer：属性值是类的名称。
+    普通的发送方式
+      producer = KafkaProducer(bootstrap_servers='192.168.19.137:9092')
+      producer.send('test_topic',b'some_message_bytes')
+    发送json字符串
+      producer = KafkaProducer(bootstrap_servers='node-teach:9092',value_serializer=lambda v: json.dumps(v).encode('utf-8'))
+      producer.send('test_topic', {'key1': 'value1'})
+    发送压缩数据
+      producer = KafkaProducer(bootstrap_servers='node-teach:9092',compression_type='gzip')
+      producer.send('test_topic', b'msg')
+
+  8 案例：生产者消费者代码
+    目的：实现一个消息发送与消息接受功能程序
+      1、创建producer，利用producer将某个目录下的所有文件名发送到指定topic，并由consumer来接收
+      2、创建consumer进行消费
+
+6 黑马实时日志分析
+  1 Flume收集日志到Kafka
+    1、开启zookeeper以及kafka测试
+      /root/bigdata/kafka/bin/zookeeper-server-start.sh -daemon /root/bigdata/kafka/config/zookeeper.properties
+      /root/bigdata/kafka/bin/kafka-server-start.sh /root/bigdata/kafka/config/server.properties
+    2、创建flume配置文件，开启flume
+      在原有的基础上添加一个kafkasink
+        a1.sinks.k2.type=org.apache.flume.sink.kafka.KafkaSink
+        a1.sinks.k2.kafka.bootstrap.servers=192.168.19.137:9092
+        a1.sinks.k2.kafka.topic=click-trace
+      重启flume
+    3、开启kafka消费者进行验证
+      /root/bigdata/kafka/bin/kafka-console-consumer.sh --bootstrap-server 192.168.19.137:9092 --topic  click-trace
+      同时通过hadoop命令到hdfs查看
+    4、脚本添加以及supervisor管理
+      在/toutiao_project/scripts目录下添加
+        start_kafka.sh
+          这个脚本中是启动zookeeper kakfaserver的命令
+      修改supervisor配置文件
+        [program:kafka]
+        command=/bin/bash /root/toutiao_project/scripts/start_kafka.sh
+      进入supervisorctl
+        执行update
+
+7 实时召回集业务
+  1 实时召回实现
+    1 创建online文件夹
+    2 实时基于内容相似召回集
+      1、配置spark streaming与Kafka对接
+        SPARK_ONLINE_CONFIG
+          设定appname...
+        StreamingContext
+          通过sparkcontext创建
+        使用KafkaUtils.createDirectStream创建一个DS SIMILAR_DS
+          sparkStreaming就可以读取指定click-trace topic的数据
+      2、读取点击行为日志数据，获取相似文章列表，过滤历史文章集合，存入召回结果以及历史记录结果
+        只要click-trace主题中有数据，则会发送到SIMILAR_DS
+        SIMILAR_DS.map(lambda x: json.loads(x[1])).foreachRDD(get_similar_online_recall)
+          get_similar_online_recall
+            判断用户行为是否是 ["click", "collect", "share"]
+            解析出articleid
+            用articleid去hbase的article_similar表中获取相似的文章
+            按照相似度排序，取出前10个articleid
+            和history_recall进行过滤
+            结果存入cb_recall online列族 同时存入history_recall
+      3、验证
+        模拟写入一个用户行为
+        去hbase cb_recall检验
+  2 热门与新文章召回
+    1 数据获取
+      热门文章也是监听用户行为日志
+      HOT_DS = KafkaUtils.createDirectStream(stream_sc, ['click-trace'], kafka_params)
+      新文章后台审核通过之后，会通过kafkaProducer向对应的主题new-article发送消息
+      NEW_ARTICLE_DS = KafkaUtils.createDirectStream(stream_sc, ['new-article'], kafka_params)
+
+    2 redis中存储
+      新文章
+      ch:{}:new	ch:18:new client.zadd("ch:{}:new".format(channel_id), {article_id: time.time()})
+      热门文章
+      ch:{}:hot	ch:18:hot client.zincrby("ch:{}:hot".format(row['channelId']), 1, row['param']['articleId'])
+
+    3 编写热门文章收集程序
+      创建HOT_DS关联到click-trace主题
+      HOT_DS.map(lambda x: json.loads(x[1])).foreachRDD(updateHotArt)
+        updateHotArt
+          解析用户行为和articleid
+          如果是["click", "collect", "share"]之一
+            redis中对应articleid的热度值加1
+      启动之后模拟写入一条用户行为日志，去redis中验证
+
+    4 编写新文章收集
+      创建NEW_ARTICLE_DS关联到new-articlea主题
+      NEW_ARTICLE_DS.map(lambda x: x[1]).foreachRDD(computeFunction)
+        computeFunction
+          解析出channelid ariticleid
+          按照设定格式存入redis
+          client.zadd("ch:{}:new".format(channel_id), {article_id: time.time()})
+
+      启动之后模拟后台发送消息，去redis中验证
+        # kafka消息生产者
+        kafka_producer = KafkaProducer(bootstrap_servers=['192.168.19.137:9092'])
+
+        # 构造消息并发送
+        msg = '{},{}'.format(18, 13894)
+        kafka_producer.send('new-article', msg.encode())
+
+  3 添加supervisor在线实时运行进程管理
+    修改reco.conf
+    添加
+    [program:online]
+      environment=JAVA_HOME=/root/bigdata/jdk,SPARK_HOME=/root/bigdata/spark,HADOOP_HOME=/root/bigdata/hadoop,PYSPARK_PYTHON=/miniconda2/envs/reco_sys/bin/python ,PYSPARK_DRIVER_PYTHON=/miniconda2/envs/reco_sys/bin/python,PYSPARK_SUBMIT_ARGS='--packages org.apache.spark:spark-streaming-kafka-0-8_2.11:2.2.2 pyspark-shell'
+      command=/miniconda2/envs/reco_sys/bin/python /root/toutiao_project/reco_sys/online/online_update.py
+      directory=/root/toutiao_project/reco_sys/online
+    supervisorctl update
